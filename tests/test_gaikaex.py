@@ -60,3 +60,29 @@ def test_resolve_year_rollover():
     assert resolve_year(1, date(2026, 12, 30)) == 2027   # 年末に1月の予定
     assert resolve_year(12, date(2027, 1, 2)) == 2026    # 年始に12月の実績
     assert resolve_year(7, date(2026, 7, 30)) == 2026
+
+
+def test_24h_notation_pmi():
+    # フィクスチャ: セクション 8/3（月） の「7月製造業購買担当者景気指数(PMI)」は 24:00 表記
+    # → 翌日（8/4）の 00:00 JST、time_known=True
+    events = load_events()
+    pmi = [e for e in events if e.title == "7月製造業購買担当者景気指数(PMI)"]
+    assert len(pmi) >= 1
+    # 24:00 表記のもの（8/3セクション）
+    entry = next(
+        (e for e in pmi if e.datetime_jst == datetime(2026, 8, 4, 0, 0, tzinfo=JST)),
+        None,
+    )
+    assert entry is not None, "24:00表記のPMIが8/4 00:00 JSTとしてパースされていない"
+    assert entry.time_known is True
+
+
+def test_28h_notation_mexico_central_bank():
+    # フィクスチャ: セクション 8/6（木） の「メキシコ中銀、政策金利」は 28:00 表記
+    # → 翌日（8/7）の 04:00 JST、time_known=True
+    events = load_events()
+    mexico = [e for e in events if e.title == "メキシコ中銀、政策金利"]
+    assert len(mexico) == 1
+    e = mexico[0]
+    assert e.datetime_jst == datetime(2026, 8, 7, 4, 0, tzinfo=JST)
+    assert e.time_known is True

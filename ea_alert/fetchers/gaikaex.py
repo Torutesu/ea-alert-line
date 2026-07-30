@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from bs4 import BeautifulSoup
 
@@ -57,8 +57,17 @@ def parse_calendar(html: str, today: date) -> list[Event]:
             importance = ps[2].get_text(strip=True).count("★")
 
             tm = _TIME_RE.match(time_text)
-            if tm and int(tm.group(1)) < 24:
-                dt = datetime(year, month, day, int(tm.group(1)), int(tm.group(2)), tzinfo=JST)
+            if tm:
+                hour, minute = int(tm.group(1)), int(tm.group(2))
+                if hour < 24:
+                    # 通常時刻
+                    dt = datetime(year, month, day, hour, minute, tzinfo=JST)
+                else:
+                    # FX業界慣習の24時間超表記（例: 28:00 = 翌日04:00 JST）
+                    # timedelta に委ねることで月末・年末跨ぎを自動処理する
+                    dt = datetime(year, month, day, 0, 0, tzinfo=JST) + timedelta(
+                        days=1, hours=hour - 24, minutes=minute
+                    )
                 time_known = True
             else:
                 dt = datetime(year, month, day, 0, 0, tzinfo=JST)
