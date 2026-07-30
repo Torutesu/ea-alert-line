@@ -19,7 +19,7 @@ from ea_alert.filters import indicator_matches
 from ea_alert.models import JST, KIND_INDICATOR, KIND_SPEECH
 from ea_alert.notifier import (
     LineNotifier,
-    format_pre_indicator,
+    format_pre_indicators,
     format_pre_speech,
     format_statement,
 )
@@ -30,8 +30,10 @@ STALE_STATEMENT = timedelta(hours=6)  # これより古い記事は速報しな�
 
 
 def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> None:
-    # B: 経済指標の直前アラート
+    # B: 経済指標の直前アラート（同時刻をグループ化して1通に、無料枠保護）
     window_end = now + timedelta(minutes=config.pre_indicator_minutes)
+    # 対象イベントを先に収集し、datetime_jst でグループ化
+    groups: dict[datetime, list] = {}
     for e in store.events_between(now, window_end, kind=KIND_INDICATOR):
         if not e.time_known:
             continue
@@ -39,12 +41,16 @@ def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> N
             continue
         if store.was_sent(e.id, "pre_indicator"):
             continue
+        groups.setdefault(e.datetime_jst, []).append(e)
+    # グループごとに1 broadcast → グループ内全イベントを mark_sent
+    for group_events in groups.values():
         if config.notices.get("pre_indicator", True):
             notifier.broadcast(
-                format_pre_indicator(e, config.pre_indicator_minutes)
+                format_pre_indicators(group_events, config.pre_indicator_minutes)
             )
-        # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
-        store.mark_sent(e.id, "pre_indicator", now)
+        for e in group_events:
+            # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
+            store.mark_sent(e.id, "pre_indicator", now)
 
     # C: 要人発言の予告
     window_end = now + timedelta(minutes=config.pre_speech_minutes)

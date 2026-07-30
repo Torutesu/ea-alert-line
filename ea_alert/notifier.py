@@ -41,8 +41,15 @@ def format_digest(events: list[Event], target_date: date) -> str:
     return "\n".join([header] + [_indicator_line(e) for e in ordered])
 
 
+def format_pre_indicators(events: list[Event], minutes: int) -> str:
+    """同時刻の複数指標を1通にまとめる（無料枠保護）。"""
+    lines = [f"⚠️ まもなく発表（{minutes}分後）"]
+    lines += [_indicator_line(e) for e in sorted(events, key=lambda e: e.datetime_jst)]
+    return "\n".join(lines)
+
+
 def format_pre_indicator(event: Event, minutes: int) -> str:
-    return f"⚠️ まもなく発表（{minutes}分後）\n{_indicator_line(event)}"
+    return format_pre_indicators([event], minutes)
 
 
 def format_pre_speech(event: Event, minutes: int) -> str:
