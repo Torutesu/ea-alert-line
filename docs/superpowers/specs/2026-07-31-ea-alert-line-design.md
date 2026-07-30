@@ -52,7 +52,7 @@ FXの自動売買（EA）は、経済指標の発表や要人発言によるフ�
 | フィールド | 内容 |
 |---|---|
 | `id` | ソース＋日時＋タイトルから導出する安定キー（重複排除・送信済み判定に使用） |
-| `kind` | `indicator`（経済指標）/ `speech`（発言予定）/ `statement`（発言速報） |
+| `kind` | `indicator`（経済指標）/ `speech`（発言予定）。発言速報（statement）は Event にせず StatementNews + seen_news で扱う |
 | `datetime_jst` | イベント日時（JST） |
 | `country` | 国・地域 |
 | `title` | イベント名（日本語） |
