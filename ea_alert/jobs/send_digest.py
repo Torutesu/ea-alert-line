@@ -27,6 +27,8 @@ def run(config: Config, store: Store, notifier, now: datetime) -> None:
     if not targets:
         logger.info("no digest targets for %s", now.date())
         return
+    # digestはoffの間 mark_sent しない: 日次1回のみで再通知の連投リスクがなく、
+    # 当日中にonへ戻せばその日の分を送れるようにするため
     if not config.notices.get("digest", True):
         return
     notifier.broadcast(format_digest(targets, now.date()))

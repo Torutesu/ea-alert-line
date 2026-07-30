@@ -43,6 +43,7 @@ def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> N
             notifier.broadcast(
                 format_pre_indicator(e, config.pre_indicator_minutes)
             )
+        # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
         store.mark_sent(e.id, "pre_indicator", now)
 
     # C: 要人発言の予告
@@ -52,6 +53,7 @@ def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> N
             continue
         if config.notices.get("pre_speech", True):
             notifier.broadcast(format_pre_speech(e, config.pre_speech_minutes))
+        # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
         store.mark_sent(e.id, "pre_speech", now)
 
 
