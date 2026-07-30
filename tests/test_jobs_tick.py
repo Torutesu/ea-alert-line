@@ -142,3 +142,44 @@ def test_stale_statement_not_notified(tmp_path):
 
     assert notifier.broadcasts == []
     assert store.is_seen("374772")
+
+
+def test_parse_error_admin_notice_fires_once_per_day(tmp_path):
+    # 空一覧で tick.run を同日2回実行 → 管理者通知は1回のみ
+    now = datetime(2026, 7, 31, 10, 0, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path, list_html=EMPTY_LIST_HTML)
+
+    tick.run(config, store, notifier, http_get, now)
+    tick.run(config, store, notifier, http_get, now)
+
+    assert len(notifier.admin_notices) == 1
+
+
+def test_same_time_indicators_merged_into_one_broadcast(tmp_path):
+    # 同時刻の★★★指標2件 → 1通にまとめる
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path)
+    e1 = make_indicator(25, now, title="米GDP")
+    e2 = make_indicator(25, now, title="米PCE")
+    store.upsert_events([e1, e2])
+
+    tick.run(config, store, notifier, http_get, now)
+
+    assert len(notifier.broadcasts) == 1
+    assert "米GDP" in notifier.broadcasts[0]
+    assert "米PCE" in notifier.broadcasts[0]
+
+
+def test_same_time_indicators_idempotent_after_merge(tmp_path):
+    # まとめ通知の後、2回目実行で増えない
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path)
+    store.upsert_events([
+        make_indicator(25, now, title="米GDP"),
+        make_indicator(25, now, title="米PCE"),
+    ])
+
+    tick.run(config, store, notifier, http_get, now)
+    tick.run(config, store, notifier, http_get, now)
+
+    assert len(notifier.broadcasts) == 1

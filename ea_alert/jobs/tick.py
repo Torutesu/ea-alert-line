@@ -61,9 +61,13 @@ def _poll_statements(config: Config, store: Store, notifier, http_get, now: date
     html = http_get(STATEMENT_LIST_URL)
     items = parse_statement_list(html, today=now.date())
     if not items:
-        notifier.notify_admin(
-            "みんかぶstatement一覧のパース結果が0件です。サイト構造変更の可能性があります。"
-        )
+        # sent_log を流用して同日の2回目以降の重複通知を防ぐ（月200通無料枠保護）
+        alert_id = f"parse_alert:minkabu:{now:%Y-%m-%d}"
+        if not store.was_sent(alert_id, "admin"):
+            notifier.notify_admin(
+                "みんかぶstatement一覧のパース結果が0件です。サイト構造変更の可能性があります。"
+            )
+            store.mark_sent(alert_id, "admin", now)
         return
     bootstrap = store.seen_count() == 0  # 初回はまとめて既読化（過去分を連投しない）
 
