@@ -1,0 +1,14 @@
+currencies: [USD, JPY, EUR, GBP]
+digest_min_importance: 2        # 朝ダイジェスト: ★★以上
+pre_indicator_min_importance: 3 # 直前アラート: ★★★のみ
+pre_indicator_minutes: 30       # 指標の何分前に通知するか
+pre_speech_minutes: 120         # 発言予定の何分前に通知するか
+notices:
+  digest: true
+  pre_indicator: true
+  pre_speech: true
+  statement: true
+line:
+  channel_access_token_env: LINE_CHANNEL_ACCESS_TOKEN
+  admin_user_id: ""             # 管理者のLINE userId（空なら管理者通知はログのみ）
+db_path: data/ea_alert.db
