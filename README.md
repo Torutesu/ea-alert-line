@@ -26,7 +26,36 @@ FXの経済指標・要人発言をスクレイピングし、EA（自動売買�
 
 ※無料プランは月200通まで。通知種別は `config.yaml` の `notices` で個別にオフにできる。
 
-### 2. VPSへの配置
+### 2. GitHub Actions での運用（採用中）
+
+このリポジトリは GitHub Actions のスケジュール実行で動く（サーバー不要・パブリックリポジトリなら無料）。
+
+| ワークフロー | スケジュール | 内容 |
+|---|---|---|
+| `.github/workflows/fetch-daily.yml` | 21:00 UTC（= 06:00 JST） | カレンダー取得・DB更新 |
+| `.github/workflows/send-digest.yml` | 00:00 UTC（= 09:00 JST） | 朝ダイジェスト送信 |
+| `.github/workflows/tick.yml` | 5分ごと | 直前アラート・発言予告・速報 |
+
+セットアップ:
+
+1. リポジトリの **Settings → Secrets and variables → Actions** で
+   `LINE_CHANNEL_ACCESS_TOKEN` にチャネルアクセストークンを登録
+   （未登録の間、tick / digest はスキップされ、失敗にはならない）
+2. **Actions タブでワークフローを有効化**（フォーク直後は手動で有効化が必要）
+3. 動作確認は各ワークフローの **Run workflow**（workflow_dispatch）で手動実行
+
+仕組みメモ:
+
+- 状態DB（`data/ea_alert.db`）はワークフローが**リポジトリにコミットして永続化**する
+  （`chore: 状態DB更新` コミットが自動で積まれるのは正常動作）
+- 3ワークフローは同一 concurrency グループで直列実行され、DBコミットの競合を防ぐ
+- GitHub Actions の cron は数分〜15分程度遅れることがある。窓判定はその前提で
+  設計されており通知漏れにはならないが、「30分前」が実際は15〜25分前になることがある
+- ※ tick の初回実行はブートストラップとして既存ニュースを既読化するだけで通知しない
+- パブリックリポジトリの scheduled workflow は60日間リポジトリに活動がないと
+  自動停止するが、本ボットはDBコミットで常に活動があるため実質問題ない
+
+### 3. ローカル/VPSでの運用（代替）
 
 ```bash
 git clone <このリポジトリ> && cd ea-alert-line
@@ -34,12 +63,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 export LINE_CHANNEL_ACCESS_TOKEN="（発行したトークン）"
 mkdir -p data logs
-```
-
-動作確認（テスト実行）:
-
-```bash
-.venv/bin/pytest -q
+.venv/bin/pytest -q   # 動作確認
 ```
 
 手動でジョブを1回ずつ実行して疎通確認:
@@ -50,12 +74,7 @@ mkdir -p data logs
 .venv/bin/python -m ea_alert.jobs.tick --config config.yaml
 ```
 
-※ tick の初回実行はブートストラップとして既存ニュースを既読化するだけで通知しない。
-
-### 3. cron設定
-
-`crontab -e` で以下を登録（パスは環境に合わせる）。
-**時刻はJST前提**。VPSのタイムゾーンがJST以外の場合は `CRON_TZ=Asia/Tokyo` を先頭に付ける。
+cron設定（VPSの場合。時刻はJST前提、JST以外のTZなら `CRON_TZ=Asia/Tokyo` を付ける）:
 
 ```cron
 CRON_TZ=Asia/Tokyo
