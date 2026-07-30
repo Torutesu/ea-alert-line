@@ -52,7 +52,7 @@ def parse_calendar(html: str, today: date) -> list[Event]:
             if len(ps) < 3:
                 continue
             flag_img = ps[0].find("img")
-            country = flag_img["alt"] if flag_img else ""
+            country = flag_img.get("alt", "") if flag_img else ""
             time_text = ps[1].get_text(strip=True)
             importance = ps[2].get_text(strip=True).count("★")
 
