@@ -25,7 +25,10 @@ COUNTRY_TO_CURRENCY = {
 def indicator_matches(
     event: Event, currencies: list[str], min_importance: int
 ) -> bool:
-    """経済指標が通知対象か判定する。要人発言（speech/statement）には適用しない。"""
+    """通貨・重要度が通知条件を満たすか判定する。
+
+    country が COUNTRY_TO_CURRENCY に存在しない場合（要人発言の country="" を含む）は常に False。
+    """
     if event.importance < min_importance:
         return False
     currency = COUNTRY_TO_CURRENCY.get(event.country)
