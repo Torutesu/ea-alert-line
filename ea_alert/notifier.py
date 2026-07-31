@@ -67,6 +67,21 @@ def format_statement(news: StatementNews) -> str:
     return f"🚨【速報】要人発言\n{news.title}\n▶ {news.url}"
 
 
+def format_statements(items: list[StatementNews]) -> str:
+    """複数の速報を1通にまとめる。
+
+    会見中は数分で何本もニュース化されるため、1件1通だと通知が連投され、
+    LINEの課金通数も膨らむ。1回のポーリングで拾った分をまとめて1通にする。
+    """
+    if len(items) == 1:
+        return format_statement(items[0])
+    ordered = sorted(items, key=lambda n: n.datetime_jst)
+    lines = [f"🚨【速報】要人発言 {len(ordered)}件"]
+    for n in ordered:
+        lines.append(f"\n{n.datetime_jst:%H:%M} {n.title}\n▶ {n.url}")
+    return "\n".join(lines)
+
+
 class LineNotifier:
     def __init__(self, token: str, admin_user_id: str = "") -> None:
         self.token = token

@@ -21,7 +21,7 @@ from ea_alert.notifier import (
     LineNotifier,
     format_pre_indicators,
     format_pre_speech,
-    format_statement,
+    format_statements,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,8 @@ def _poll_statements(config: Config, store: Store, notifier, http_get, now: date
         return
     bootstrap = store.seen_count() == 0  # 初回はまとめて既読化（過去分を連投しない）
 
+    # 速報は個別送信せずに集めてから1通にまとめる（会見中の連投と課金通数を抑制）
+    to_notify = []
     for item in items:
         if store.is_seen(item.news_id):
             continue
@@ -91,8 +93,11 @@ def _poll_statements(config: Config, store: Store, notifier, http_get, now: date
             and config.notices.get("statement", True)
             and now - item.datetime_jst <= STALE_STATEMENT
         ):
-            notifier.broadcast(format_statement(item))
+            to_notify.append(item)
         store.mark_seen(item.news_id, now)
+
+    if to_notify:
+        notifier.broadcast(format_statements(to_notify))
 
 
 def run(config: Config, store: Store, notifier, http_get, now: datetime) -> None:

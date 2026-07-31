@@ -183,3 +183,29 @@ def test_same_time_indicators_idempotent_after_merge(tmp_path):
     tick.run(config, store, notifier, http_get, now)
 
     assert len(notifier.broadcasts) == 1
+
+
+def test_multiple_new_statements_merged_into_one_broadcast(tmp_path):
+    """会見中の連続速報が1通にまとまること（連投・課金通数の抑制）。"""
+    now = datetime(2026, 7, 30, 23, 50, tzinfo=JST)
+    config, store, notifier, http_get = setup(
+        tmp_path, list_html=LIST_HTML,
+        article_urls={"https://fx.minkabu.jp/news/374708": ARTICLE_HTML},
+    )
+    tick.run(config, store, notifier, http_get, now)  # bootstrap
+    # 複数の速報を未読に戻して「会見中に一気に配信された」状況を作る
+    store.conn.execute(
+        "DELETE FROM seen_news WHERE news_id IN ('374772','374771','374770')"
+    )
+    store.conn.commit()
+
+    tick.run(config, store, notifier, http_get, now)
+
+    assert len(notifier.broadcasts) == 1  # 3件でも1通
+    text = notifier.broadcasts[0]
+    assert "3件" in text
+    assert text.count("🚨") == 1
+    assert "374772" in text and "374771" in text and "374770" in text
+    # 全件が既読化され、再実行しても増えない
+    tick.run(config, store, notifier, http_get, now)
+    assert len(notifier.broadcasts) == 1

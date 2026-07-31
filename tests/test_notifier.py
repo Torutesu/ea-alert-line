@@ -123,3 +123,36 @@ def test_line_notifier_notify_admin_without_user_id(monkeypatch):
     ln = notifier.LineNotifier("token-abc", admin_user_id="")
     ln.notify_admin("パース0件")  # userId未設定ならAPIを呼ばずログのみ
     assert called == []
+
+
+def make_news(news_id, title, minute=30):
+    return StatementNews(
+        news_id=news_id,
+        title=title,
+        datetime_jst=datetime(2026, 7, 30, 21, minute, tzinfo=JST),
+        url=f"https://fx.minkabu.jp/news/{news_id}",
+    )
+
+
+def test_format_statements_single_matches_singular_format():
+    n = make_news("374772", "ベイリー英中銀総裁　CPIが我々の予想を下回っている")
+    assert notifier.format_statements([n]) == notifier.format_statement(n)
+
+
+def test_format_statements_merges_multiple_into_one_message():
+    items = [
+        make_news("3", "ベイリー英中銀総裁　利上げが必要になる可能性", minute=25),
+        make_news("1", "ベイリー英中銀総裁　CPIは予想を下回る", minute=15),
+        make_news("2", "ベイリー英中銀総裁　second round effects", minute=20),
+    ]
+    text = notifier.format_statements(items)
+
+    assert text.count("🚨") == 1  # ヘッダーは1つだけ
+    assert "3件" in text
+    for n in items:
+        assert n.title in text
+        assert n.url in text
+    # 時系列（古い順）に並ぶ
+    assert text.index("CPIは予想を下回る") < text.index("second round effects") < text.index("利上げが必要になる可能性")
+    # 時刻が各行に付く
+    assert "21:15" in text and "21:20" in text and "21:25" in text
