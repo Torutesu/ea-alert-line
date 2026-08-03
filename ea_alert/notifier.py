@@ -13,7 +13,48 @@ logger = logging.getLogger(__name__)
 BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"
 PUSH_URL = "https://api.line.me/v2/bot/message/push"
 
+# 再送で回復し得るのはサーバ側の一時障害だけ。4xx（429=通数上限/レート超過を含む）は
+# 数秒後に送り直しても同じ結果になり、通数と実行時間を浪費するだけなので再送しない。
+RETRIABLE_STATUS = {500, 502, 503, 504}
+# 設定ミス（トークン不正・権限不足）は運用者が直すまで回復しないので握りつぶさない
+FATAL_STATUS = {401, 403}
+
 _WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
+
+
+class LineApiError(RuntimeError):
+    """LINE Messaging API への送信失敗。status_code は接続失敗時のみ None。"""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    @property
+    def is_fatal(self) -> bool:
+        """設定ミス由来か（=握りつぶさずジョブを落とすべきか）。"""
+        return self.status_code in FATAL_STATUS
+
+
+def try_broadcast(notifier, text: str) -> bool:
+    """送信失敗でジョブを落とさずに続行する（成功したら True）。
+
+    tickは5分ごとに走るため、送信失敗で異常終了すると状態DBがコミットされず、
+    次のtickが同じ通知を作り直して再送を繰り返す。通数上限（429）に当たった
+    ときほどこの再送ループが効いてしまうので、失敗はログに残して先へ進める。
+    """
+    try:
+        notifier.broadcast(text)
+        return True
+    except LineApiError as exc:
+        if exc.is_fatal:
+            raise
+        logger.error("LINE送信に失敗、この通知はスキップします: %s", exc)
+        return False
+
+
+def _response_detail(resp) -> str:
+    body = (getattr(resp, "text", "") or "").strip().replace("\n", " ")
+    return body[:200] if body else "(本文なし)"
 
 
 def _stars(importance: int) -> str:
@@ -88,6 +129,7 @@ class LineNotifier:
         self.admin_user_id = admin_user_id
 
     def _post(self, url: str, payload: dict, retries: int = 3) -> None:
+        last_error: LineApiError | None = None
         for attempt in range(retries):
             try:
                 resp = requests.post(
@@ -99,12 +141,21 @@ class LineNotifier:
                     json=payload,
                     timeout=15,
                 )
-                resp.raise_for_status()
-                return
-            except requests.RequestException:
-                if attempt == retries - 1:
-                    raise
-                time.sleep(2**attempt)
+            except requests.RequestException as exc:
+                last_error = LineApiError(f"{url} への接続に失敗: {exc}")
+            else:
+                if resp.status_code < 400:
+                    return
+                # 原因（通数上限か一時的なレート超過か等）はレスポンス本文にしか出ない
+                last_error = LineApiError(
+                    f"{url} が {resp.status_code} を返しました: {_response_detail(resp)}",
+                    status_code=resp.status_code,
+                )
+                if resp.status_code not in RETRIABLE_STATUS:
+                    raise last_error
+            if attempt == retries - 1:
+                raise last_error
+            time.sleep(2**attempt)
 
     def broadcast(self, text: str) -> None:
         self._post(BROADCAST_URL, {"messages": [{"type": "text", "text": text}]})
@@ -117,7 +168,11 @@ class LineNotifier:
 
     def notify_admin(self, text: str) -> None:
         """運用警告。admin_user_id 未設定ならログ出力のみ。"""
-        if self.admin_user_id:
-            self.push(self.admin_user_id, f"🔧 [ea-alert-line] {text}")
-        else:
+        if not self.admin_user_id:
             logger.warning("admin notice (no admin_user_id): %s", text)
+            return
+        try:
+            self.push(self.admin_user_id, f"🔧 [ea-alert-line] {text}")
+        except LineApiError as exc:
+            # 管理者通知が送れないこと自体でジョブを落とさない（本来の通知が優先）
+            logger.error("管理者通知の送信に失敗: %s / 内容: %s", exc, text)
