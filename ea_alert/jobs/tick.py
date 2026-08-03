@@ -4,6 +4,8 @@ import argparse
 import logging
 from datetime import datetime, timedelta
 
+import requests
+
 from ea_alert.config import Config, load_config
 from ea_alert.db import Store
 from ea_alert.fetchers import http
@@ -22,6 +24,7 @@ from ea_alert.notifier import (
     format_pre_indicators,
     format_pre_speech,
     format_statements,
+    try_broadcast,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,8 +48,9 @@ def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> N
     # グループごとに1 broadcast → グループ内全イベントを mark_sent
     for group_events in groups.values():
         if config.notices.get("pre_indicator", True):
-            notifier.broadcast(
-                format_pre_indicators(group_events, config.pre_indicator_minutes)
+            try_broadcast(
+                notifier,
+                format_pre_indicators(group_events, config.pre_indicator_minutes),
             )
         for e in group_events:
             # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
@@ -58,13 +62,19 @@ def _send_pre_alerts(config: Config, store: Store, notifier, now: datetime) -> N
         if store.was_sent(e.id, "pre_speech"):
             continue
         if config.notices.get("pre_speech", True):
-            notifier.broadcast(format_pre_speech(e, config.pre_speech_minutes))
+            try_broadcast(notifier, format_pre_speech(e, config.pre_speech_minutes))
         # 通知offでも送信済みにする: onに戻した際、過去窓のイベントをまとめて再通知しないため
         store.mark_sent(e.id, "pre_speech", now)
 
 
 def _poll_statements(config: Config, store: Store, notifier, http_get, now: datetime) -> None:
-    html = http_get(STATEMENT_LIST_URL)
+    try:
+        html = http_get(STATEMENT_LIST_URL)
+    except requests.RequestException as exc:
+        # みんかぶ側の一時的な403/5xxでtickを落とさない。落とすと状態DBがコミットされず、
+        # 既読・送信済みの記録を失って次のtickが同じ通知を作り直してしまう。
+        logger.warning("statement一覧の取得に失敗、今回のtickはスキップ: %s", exc)
+        return
     items = parse_statement_list(html, today=now.date())
     if not items:
         # sent_log を流用して同日の2回目以降の重複通知を防ぐ（月200通無料枠保護）
@@ -84,7 +94,12 @@ def _poll_statements(config: Config, store: Store, notifier, http_get, now: date
             continue
         if SCHEDULE_TITLE in item.title:
             # 発言予定記事: 本文を取得して speech イベントを upsert（速報通知はしない）
-            article_html = http_get(item.url)
+            try:
+                article_html = http_get(item.url)
+            except requests.RequestException as exc:
+                # 既読にせずスキップ → 次のtickで取り直す
+                logger.warning("発言予定記事の取得に失敗: %s (%s)", exc, item.url)
+                continue
             store.upsert_events(
                 parse_schedule_article(article_html, source_url=item.url)
             )
@@ -97,7 +112,7 @@ def _poll_statements(config: Config, store: Store, notifier, http_get, now: date
         store.mark_seen(item.news_id, now)
 
     if to_notify:
-        notifier.broadcast(format_statements(to_notify))
+        try_broadcast(notifier, format_statements(to_notify))
 
 
 def run(config: Config, store: Store, notifier, http_get, now: datetime) -> None:

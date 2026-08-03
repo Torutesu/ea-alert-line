@@ -40,6 +40,34 @@ def test_get_retries_then_succeeds(monkeypatch):
     assert len(calls) == 3
 
 
+def test_get_does_not_retry_client_error(monkeypatch):
+    # 403（bot対策など）は再送しても同じなので即座に投げる
+    calls = []
+
+    def forbidden_get(url, headers, timeout):
+        calls.append(url)
+        return FakeResponse("forbidden", status=403)
+
+    monkeypatch.setattr(http.requests, "get", forbidden_get)
+    monkeypatch.setattr(http.time, "sleep", lambda s: pytest.fail("待たずに投げること"))
+    with pytest.raises(requests.HTTPError):
+        http.get("https://example.com")
+    assert len(calls) == 1
+
+
+def test_get_retries_server_error(monkeypatch):
+    calls = []
+
+    def flaky_get(url, headers, timeout):
+        calls.append(url)
+        return FakeResponse("boom", status=503) if len(calls) < 3 else FakeResponse("ok")
+
+    monkeypatch.setattr(http.requests, "get", flaky_get)
+    monkeypatch.setattr(http.time, "sleep", lambda s: None)
+    assert http.get("https://example.com") == "ok"
+    assert len(calls) == 3
+
+
 def test_get_raises_after_all_retries(monkeypatch):
     def always_fail(url, headers, timeout):
         raise requests.ConnectionError("boom")

@@ -1,5 +1,8 @@
 from datetime import date, datetime
 
+import pytest
+import requests
+
 from ea_alert import notifier
 from ea_alert.models import JST, KIND_INDICATOR, KIND_SPEECH, Event, StatementNews
 
@@ -123,6 +126,102 @@ def test_line_notifier_notify_admin_without_user_id(monkeypatch):
     ln = notifier.LineNotifier("token-abc", admin_user_id="")
     ln.notify_admin("パース0件")  # userId未設定ならAPIを呼ばずログのみ
     assert called == []
+
+
+class ErrorResponse:
+    def __init__(self, status_code, text=""):
+        self.status_code = status_code
+        self.text = text
+
+
+def fake_poster(responses, calls):
+    """responses を順に返す（末尾に達したら最後の値を返し続ける）フェイクPOST。"""
+    def _post(url, headers, json, timeout):
+        calls.append(url)
+        item = responses[min(len(calls) - 1, len(responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+    return _post
+
+
+def test_post_does_not_retry_rate_limit(monkeypatch):
+    # 429（通数上限・レート超過）は待っても直らず、再送すると通数を余計に消費する
+    calls = []
+    monkeypatch.setattr(
+        notifier.requests, "post",
+        fake_poster([ErrorResponse(429, '{"message":"You have reached your monthly limit."}')], calls),
+    )
+    monkeypatch.setattr(notifier.time, "sleep", lambda s: None)
+
+    with pytest.raises(notifier.LineApiError) as exc_info:
+        notifier.LineNotifier("token-abc").broadcast("hello")
+
+    assert calls == [notifier.BROADCAST_URL]          # 1回だけ
+    assert exc_info.value.status_code == 429
+    assert not exc_info.value.is_fatal
+    # 原因判別のためレスポンス本文をメッセージに含める
+    assert "monthly limit" in str(exc_info.value)
+
+
+def test_post_retries_server_error_then_succeeds(monkeypatch):
+    class OkResponse:
+        status_code = 200
+        text = "{}"
+
+    calls = []
+    monkeypatch.setattr(
+        notifier.requests, "post",
+        fake_poster([ErrorResponse(503), requests.ConnectionError("boom"), OkResponse()], calls),
+    )
+    monkeypatch.setattr(notifier.time, "sleep", lambda s: None)
+
+    notifier.LineNotifier("token-abc").broadcast("hello")
+
+    assert len(calls) == 3
+
+
+def test_post_marks_auth_error_as_fatal(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        notifier.requests, "post", fake_poster([ErrorResponse(401, "invalid token")], calls)
+    )
+
+    with pytest.raises(notifier.LineApiError) as exc_info:
+        notifier.LineNotifier("bad-token").broadcast("hello")
+
+    assert exc_info.value.is_fatal
+
+
+class RaisingNotifier:
+    def __init__(self, error):
+        self.error = error
+
+    def broadcast(self, text):
+        raise self.error
+
+
+def test_try_broadcast_swallows_rate_limit():
+    assert notifier.try_broadcast(
+        RaisingNotifier(notifier.LineApiError("429", status_code=429)), "hi"
+    ) is False
+
+
+def test_try_broadcast_reraises_config_error():
+    with pytest.raises(notifier.LineApiError):
+        notifier.try_broadcast(
+            RaisingNotifier(notifier.LineApiError("401", status_code=401)), "hi"
+        )
+
+
+def test_notify_admin_does_not_raise_on_api_error(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        notifier.requests, "post", fake_poster([ErrorResponse(429)], calls)
+    )
+    # 管理者通知が失敗してもジョブ本体は続行させる
+    notifier.LineNotifier("token-abc", admin_user_id="U123").notify_admin("パース0件")
+    assert calls == [notifier.PUSH_URL]
 
 
 def make_news(news_id, title, minute=30):

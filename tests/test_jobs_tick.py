@@ -1,10 +1,14 @@
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+import requests
+
 from ea_alert.db import Store
 from ea_alert.fetchers.minkabu_statement import STATEMENT_LIST_URL
 from ea_alert.jobs import tick
 from ea_alert.models import JST, KIND_INDICATOR, KIND_SPEECH, Event
+from ea_alert.notifier import LineApiError
 from tests.fakes import FakeHttp, FakeNotifier
 from tests.test_jobs_fetch_daily import make_config
 
@@ -183,6 +187,60 @@ def test_same_time_indicators_idempotent_after_merge(tmp_path):
     tick.run(config, store, notifier, http_get, now)
 
     assert len(notifier.broadcasts) == 1
+
+
+def test_line_rate_limit_does_not_abort_tick(tmp_path):
+    """LINEが429を返してもtickは異常終了しない（状態DBを永続化させるため）。"""
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path)
+    notifier.broadcast_error = LineApiError("429", status_code=429)
+    event = make_indicator(25, now)
+    store.upsert_events([event])
+
+    tick.run(config, store, notifier, http_get, now)  # 例外を投げない
+
+    # 送信済み扱いにする: 次のtickで同じ通知を作り直して通数を溶かさないため
+    assert store.was_sent(event.id, "pre_indicator")
+
+
+def test_invalid_token_still_aborts_tick(tmp_path):
+    # 401/403は設定ミスなので握りつぶさない
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path)
+    notifier.broadcast_error = LineApiError("401", status_code=401)
+    store.upsert_events([make_indicator(25, now)])
+
+    with pytest.raises(LineApiError):
+        tick.run(config, store, notifier, http_get, now)
+
+
+def test_statement_fetch_failure_does_not_abort_tick(tmp_path):
+    """みんかぶが403を返しても、直前アラートは送られtickは正常終了する。"""
+    now = datetime(2026, 7, 31, 21, 5, tzinfo=JST)
+    config, store, notifier, http_get = setup(tmp_path)
+    http_get.responses[STATEMENT_LIST_URL] = requests.HTTPError("403 Forbidden")
+    store.upsert_events([make_indicator(25, now)])
+
+    tick.run(config, store, notifier, http_get, now)
+
+    assert len(notifier.broadcasts) == 1
+    assert "米GDP" in notifier.broadcasts[0]
+    # 取得失敗はパース0件の警告と混同しない
+    assert notifier.admin_notices == []
+
+
+def test_schedule_article_fetch_failure_keeps_item_unseen(tmp_path):
+    # 予定記事の取得だけ失敗 → 既読にせず次のtickで取り直す
+    now = datetime(2026, 7, 30, 23, 50, tzinfo=JST)
+    config, store, notifier, http_get = setup(
+        tmp_path, list_html=LIST_HTML,
+        article_urls={"https://fx.minkabu.jp/news/374708": requests.HTTPError("403")},
+    )
+
+    tick.run(config, store, notifier, http_get, now)
+
+    assert not store.is_seen("374708")
+    assert store.is_seen("374772")  # 他の記事は通常どおり既読化される
 
 
 def test_multiple_new_statements_merged_into_one_broadcast(tmp_path):
